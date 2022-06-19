@@ -14,7 +14,7 @@ import abc
 class EMM():
     """The Expectation-Majorization/Minorization method of Hunter
     """
-    def __init__(self, n, K, mm_max_iters=1000):
+    def __init__(self, n, K, mm_max_iters=10000):
         self.n = n
         self.K = K
         self.U_array = []
@@ -70,7 +70,7 @@ class EMM():
             gmm = GMM(self.n, self.F, self.F_prime, step_size=0.1)
             Uk = gmm.fit(rankings_k)
             U_all.append(Uk)
-        return np.array(U_all)    
+        return np.array(U_all)
 
     def embed(self, rankings):
         # Embedd the rankings into {-1, +1} vectorization
@@ -134,7 +134,7 @@ class MM():
     def __init__(self, n):
         self.n = n
 
-    def fit(self, rankings, max_iters=1000, tol=1e-5):
+    def fit(self, rankings, max_iters=10000, tol=1e-5):
         return mm_rankings(self.n, rankings, max_iters=max_iters, tol=tol)
 
 
@@ -205,10 +205,17 @@ def _mm_rankings_acc(n_items, rankings, win_matrix, data_weights, params):
 
     for idx, ranking in enumerate(rankings):
         # This should be of size
-        cum_weights_sum = np.cumsum(weights.take(ranking)[::-1])[::-1]
-        cum_weights_sum = np.cumsum(1./cum_weights_sum) # cum_weights_sum[i] = sum_{0 to i} 1./sum(weights for items below j)
-        cum_weights_sum[-1] = cum_weights_sum[-2]
-        denoms[ranking] += data_weights[idx] * cum_weights_sum
+        # cum_weights_sum = np.cumsum(weights.take(ranking)[::-1])[::-1]
+        # cum_weights_sum = np.cumsum(1./cum_weights_sum) # cum_weights_sum[i] = sum_{0 to i} 1./sum(weights for items below j)
+        # cum_weights_sum[-1] = cum_weights_sum[-2]
+        # denoms[ranking] += data_weights[idx] * cum_weights_sum
+        sum_ = weights.take(ranking).sum()
+
+        for i, winner in enumerate(ranking[:-1]):
+            wins[winner] += data_weights[idx]
+            val = data_weights[idx] / sum_
+            denoms[ranking[i:]] += val
+            sum_ -= weights[winner]
 
     return wins, denoms
 

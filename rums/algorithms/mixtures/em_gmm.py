@@ -155,7 +155,11 @@ class EM_GMM_PL():
 
     def fit(self, rankings, U_init=None, max_iters=100, eps=1e-4, random_init=True):
         # U, alpha = self.gmm_init(rankings)
-        U, alpha = self.spectral_init(rankings)
+        if U_init is None:
+            U, alpha = self.spectral_init(rankings)
+        else:
+            U = U_init
+            alpha = np.ones((self.K,)) * 1./self.K
 
         assert(U.shape == (self.K, self.n))
         self.U_array.append(U)
@@ -233,8 +237,8 @@ class EM_GMM_PL():
     def m_step(self, rankings, posterior_dist, current_U):
         U_all = []
         for k in range(self.K):
-            lsr = GMM(self.n, self.F, self.F_prime, step_size=self.step_size, lambd=self.lambd)
-            Uk = lsr.fit(rankings, sample_weights=posterior_dist[:, k], U_init=current_U[k,  :])
+            gmm = GMM(self.n, self.F, self.F_prime, step_size=self.step_size, lambd=self.lambd)
+            Uk = gmm.fit(rankings, sample_weights=posterior_dist[:, k], U_init=current_U[k,  :])
             U_all.append(Uk)
         return np.array(U_all)
 

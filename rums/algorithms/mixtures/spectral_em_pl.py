@@ -1,15 +1,17 @@
 import numpy as np
 import cvxpy as cp
 import scipy as sp
+import rums
 from scipy.special import logsumexp
-from rums.algorithms.pl import RegularizedILSR
+from rums.algorithms.pl import RegularizedILSR, RankCentrality
 from scipy.linalg import svd
 from sklearn.cluster import KMeans
 from scipy.special import softmax
 import time
+from scipy.optimize import LinearConstraint, minimize
 
 class SpectralEM():
-    def __init__(self, n, K, lambd=1., nu=1., ilsr_max_iters=1):
+    def __init__(self, n, K, lambd=1., nu=1., ilsr_max_iters=1, gmm_lambd=0.01, init_method="rc"):
         self.n = n
         self.K = K
         self.lambd = lambd
@@ -20,6 +22,9 @@ class SpectralEM():
         self.nu = nu
         self.ilsr_max_iters = ilsr_max_iters
         self.choice_tensor = None
+        self.gmm_lambd = gmm_lambd
+        assert (init_method in ["rc", "gmm", "cluster"])
+        self.init_method = init_method
 
     def fit(self, rankings, U_init=None, max_iters=100, eps=1e-4, verbose=False):
         if U_init is None:
@@ -83,18 +88,64 @@ class SpectralEM():
         if verbose:
             print(f"Spectral Init: Embedding took {time.time() - start} seconds")
         start = time.time()
-        clusters, _ = self.spectral_clustering(X)
+        clusters, mus = self.spectral_clustering(X)
         if verbose:
             print(f"Spectral Init: Spectral Clustering took {time.time() - start} seconds")
 
         U_all = []
         for k in range(self.K):
-            rankings_k = [ranking for idpi, ranking in enumerate(rankings) if clusters[idpi] == k]
-            lsr = RegularizedILSR(self.n, self.lambd, self.nu)
-            # Uk = lsr.fit(rankings_k, max_iters=self.ilsr_max_iters)
-            Uk = lsr.fit_accelerated(rankings_k, max_iters=self.ilsr_max_iters)
+            if self.init_method == "cluster":
+                rankings_k = [ranking for idpi, ranking in enumerate(rankings) if clusters[idpi] == k]
+                lsr = RegularizedILSR(self.n, self.lambd, self.nu)
+                Uk = lsr.fit_accelerated(rankings_k, max_iters=self.ilsr_max_iters)
+            elif self.init_method == "gmm":
+                # Use GMM to estimate the initial starting value, or why don't we use Rank Centrality to estimate initial?
+                Uk = self.gmm_estimate(mus[k, :])
+            else:
+                # Or use RC to estimate the initial starting value
+                Uk = self.rc_estimate(mus[k, :])
+            
             U_all.append(Uk)
         return np.array(U_all)
+    
+    def fill_in_center(self, mu):
+        # Estimate the center
+        P = np.eye(self.n)
+        P[np.triu_indices(self.n, 1)] = mu        
+        P = -P.T + P
+        P += 1./2
+        return P
+    
+    def rc_estimate(self, mu):
+        P = self.fill_in_center(mu)
+        rc = RankCentrality(self.n)
+        return rc.fit_from_pairwise_probabilities(P)
+    
+    def gmm_estimate(self, mu):
+        P = self.fill_in_center(mu)
+        np.fill_diagonal(P, 0)
+        
+        F = lambda x: rums.algorithms.utils.F_gumbel(x, 1)
+        F_prime = lambda x: rums.algorithms.utils.F_prime_gumbel(x, 1)
+        
+        def gmm_loss(U):
+            """
+            The goal is to minimize 
+            L = sum_{a != b} (P[a,b] F(Ua - Ub) - P[b,a] F(Ub - Ua))**2
+            """
+            Delta = np.outer(U, np.ones((self.n,))) - np.outer(np.ones((self.n,)), U) # Delta[a,b] = Ua - Ub (note how this is the opposite of the Delta in CML)
+            f_delta = F_prime(Delta)
+            F_delta = F(Delta)
+            L = 1./2 * np.sum((P * F_delta - P.T * F_delta.T)**2) + 1./2 * np.sum(U**2) * self.gmm_lambd
+            grad = np.zeros((self.n,))
+            for i in range(self.n):
+                grad[i] = 2 * np.sum((P[i, :] * F_delta[i, :] - P[:, i] * F_delta[:, i]) * (P[i, :] * f_delta[i, :] + P[:, i] * f_delta[:, i])) + self.gmm_lambd * U[i]
+            return L, grad
+
+        constraint = LinearConstraint(np.ones((1, self.n)), 0, 0)
+        res = minimize(gmm_loss, np.zeros((self.n,)), constraints=[constraint], jac=True)
+        U = res["x"]
+        return U - np.mean(U)
 
     def embed(self, rankings):
         # Embedd the rankings into {-1, +1} vectorization
@@ -106,8 +157,8 @@ class SpectralEM():
             for idx, i in enumerate(ranking[:-1]):
                 for idj in range(idx+1, len(ranking)):
                     j = ranking[idj]
-                    Xi[j, i] = 1
-                    Xi[i, j] = -1
+                    Xi[j, i] = 1./2
+                    # Xi[i, j] = -1s
             X[idpi, :] = Xi[np.triu_indices(self.n, 1)].flatten()
         return X
 
@@ -128,7 +179,6 @@ class SpectralEM():
         U_all = []
         for k in range(self.K):
             lsr = RegularizedILSR(self.n, self.lambd, self.nu)
-            # Uk = lsr.fit(rankings, sample_weights=posterior_dist[:, k], theta_init=U_current[k,:], max_iters=self.ilsr_max_iters)
             # Use the precomputed choice tensor to avoid wasteful computation
             Uk = lsr.fit_accelerated(self.choice_tensor, sample_weights=posterior_dist[:, k], theta_init=U_current[k,:], max_iters=self.ilsr_max_iters, is_choice_tensor=True)
             U_all.append(Uk)

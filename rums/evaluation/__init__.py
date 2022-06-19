@@ -18,6 +18,10 @@ def validate_and_normalize(U, alpha=None):
     return U
 
 
+def top_K_accuracy(rank, rank_est, K):
+    return len(np.intersect1d(rank[:K], rank_est[:K]))/K
+
+
 def ell2(U, Uhat):
     return np.linalg.norm((Uhat-np.mean(Uhat)) - (U-np.mean(U)))
 

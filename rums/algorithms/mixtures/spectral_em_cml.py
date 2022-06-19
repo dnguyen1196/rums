@@ -566,7 +566,7 @@ class SpectralSurrogateEM():
         for _ in range(self.max_iters):
             U_next, log_lik, alpha_next = self.surrogate_em_step(X, X_allpair, U, alpha, X_with_0, X_without_0)
             U = (1 - self.step_size) * U + self.step_size * U_next
-            alhpa = (1 - self.step_size) * alpha + self.step_size * alpha_next
+            alpha = (1 - self.step_size) * alpha + self.step_size * alpha_next
             
             self.log_lik_track.append(log_lik)
             self.U_track.append(U)

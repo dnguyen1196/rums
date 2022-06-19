@@ -46,7 +46,7 @@ class GMM():
             Delta = np.outer(U, np.ones((self.n,))) - np.outer(np.ones((self.n,)), U) # Delta[a,b] = Ua - Ub (note how this is the opposite of the Delta in CML)
             f_delta = self.F_prime(Delta)
             F_delta = self.F(Delta)
-            L = 1./2 * np.sum((P * F_delta + P.T * F_delta.T)**2) + 1./2 * np.sum(U**2) * self.lambd
+            L = 1./2 * np.sum((P * F_delta - P.T * F_delta.T)**2) + 1./2 * np.sum(U**2) * self.lambd
             grad = np.zeros((self.n,))
             for i in range(self.n):
                 grad[i] = 2 * np.sum((P[i, :] * F_delta[i, :] - P[:, i] * F_delta[:, i]) * (P[i, :] * f_delta[i, :] + P[:, i] * f_delta[:, i])) + self.lambd * U[i]

@@ -5,94 +5,113 @@ import time
 # How should we handle the situation when some items have no outflow -> should we just truncate those at 1./n**2? What's the rationale for this?
 
 class RankCentrality():
-    def __init__(self, n, lambd=1., nu=1):
+    def __init__(self, n, nu=1):
         self.n = n
         self.nu = nu
+        self.iter_counts = None
 
-    def fit(self, ranked_data, max_iters=100, eps=1e-6, max_iters_mc=10000, eps_mc=1e-6, sample_weights=None, theta_init=None, verbose=False):
+    def fit(self, ranked_data, max_iters_mc=10000, eps_mc=1e-6, theta_init=None, verbose=False):
 
         start = time.time()
         if verbose:
             print("Choice breaking ... ")
-        choice_data, choice_data_weights = self.choice_break(ranked_data, sample_weights)
+        comparisons = self.rank_break(ranked_data)
+        
         if verbose:
             print(f"Choice breaking took {time.time() - start} seconds")
 
         if theta_init is None:
             theta_init = np.zeros((self.n,))
         theta = theta_init
+        
         pi = softmax(theta)[:, np.newaxis]
         pi = pi.T
         assert(pi.shape == (1, self.n))
 
+        start = time.time()
+        M, d = self.construct_markov_chain(comparisons)
+        mc_construction_time = time.time() - start
+
+        # Compute stationary distribution
+        start = time.time()
+        pi_, iter_counts = self.compute_stationary_distribution(M, pi, max_iters_mc, eps_mc, return_iter_count=True)
+        mc_convergence_time = time.time() - start
+        self.iter_counts = iter_counts
+
         if verbose:
-            print("Running ILSR ... ")
+            print(f"The MC took {mc_construction_time} to construct and {mc_convergence_time} to converge after {iter_counts} iterations")
 
-        for it in range(max_iters):
-            # Construct Markov chain
+        # Normalize
+        pi_[0, :] = pi_[0, :]/d
+        pi_[0, :] = pi_[0, :] / np.sum(pi_)
 
-            start = time.time()
-            M, d = self.construct_markov_chain(choice_data, pi.flatten(), theta, choice_data_weights)
-            mc_construction_time = time.time() - start
-
-            # Compute stationary distribution
-            start = time.time()
-            pi_, iter_counts = self.compute_stationary_distribution(M, max_iters_mc, eps_mc, return_iter_count=True)
-            mc_convergence_time = time.time() - start
-            self.iteration_counts.append(iter_counts)
-
-            if verbose:
-                print(f"ILSR Iter {it}, the MC took {mc_construction_time} to construct and {mc_convergence_time} to converge")
-
-            # Normalize
-            # pi_ = pi_/d
-            pi_[0, :] = pi_[0, :] / np.sum(pi_)
-
-            # Estimate item parameters
-            theta_ = np.log(pi_.flatten())
-            theta_ -= np.mean(theta_)
-
-            if np.linalg.norm(pi.flatten() - pi_.flatten()) < eps:
-                break
-
-            pi = pi_
-            theta = theta_
-            self.theta_arr.append(theta)
+        # Estimate item parameters
+        theta = np.log(pi_.flatten())
+        theta -= np.mean(theta)
 
         self.theta = np.copy(theta)
-        return theta
+        return self.theta
     
-    def choice_break(self, data, sample_weights=None):
-        if sample_weights is None:
-            sample_weights = np.ones((len(data),))
-
-        choice_data = []
-        choice_data_weights = []
-        for idpi, rank in enumerate(data):
-            for idx, i in enumerate(rank[:-1]):
-                choice_data.append((i, rank[idx:]))
-                choice_data_weights.append(sample_weights[idpi])
-
-        return choice_data, np.array(choice_data_weights)
     
-    def construct_markov_chain(self, choice_data, pi, theta, sample_weights=None):
-        assert(pi.shape == (self.n,))
-        # print(pi)
-        if sample_weights is None:
-            sample_weights = np.ones((len(choice_data),))
+    def fit_from_pairwise_probabilities(self, P, max_iters_mc=10000, eps_mc=1e-6, theta_init=None, verbose=False):
+        M = np.where(np.logical_or((P != 0), (P.T != 0)), P+eps_mc, P) # Add a very small regularization
+        # M = P
+        np.fill_diagonal(M, 0)
+        d_max = np.max(np.sum(M,1))
+        d = np.ones((self.n,)) * d_max
+        # d = np.sum(M, 1)
+        for i in range(self.n):
+            M[i, :] /= d[i]
+            M[i, i] = 1. - np.sum(M[i, :])
+        
+        if theta_init is None:
+            theta_init = np.zeros((self.n,))
+        theta = theta_init
+        pi = softmax(theta)[:, np.newaxis]
+        pi = pi.T
+        assert(pi.shape == (1, self.n))
+        
+        # Compute stationary distribution
+        start = time.time()
+        pi_, iter_counts = self.compute_stationary_distribution(M, pi, max_iters_mc, eps_mc, return_iter_count=True)
+        mc_convergence_time = time.time() - start
+        self.iter_counts = iter_counts
 
+        # Normalize
+        pi_[0, :] = pi_[0, :]/d
+        pi_[0, :] = pi_[0, :] / np.sum(pi_)
+
+        # Estimate item parameters
+        theta = np.log(pi_.flatten())
+        theta -= np.mean(theta)
+
+        self.theta = np.copy(theta)
+        return self.theta
+    
+    def rank_break(self, rankings):
+        comparisons = []
+        for rank in rankings:
+            for idi, i in enumerate(rank[:-1]):
+                for j in rank[idi+1:]:
+                    comparisons.append((i, j))
+
+        return comparisons
+    
+    def construct_markov_chain(self, comparisons):
         M = np.zeros((self.n, self.n))
-
-        for sample_idx, (i, choice_sets) in enumerate(choice_data):
-            weight = np.sum([pi[k] for k in choice_sets])
-            for j in choice_sets:
-                if j != i:
-                    M[j, i] += 1./weight * sample_weights[sample_idx]
-
+        for winner, loser in comparisons:
+            M[loser, winner] += 1
+        
         # Check everypair where if i flows into j, j should also have back flow 
         M = np.where(np.logical_or((M != 0), (M.T != 0)), M+self.nu, M)
         
-
+        for i in range(self.n-1):
+            for j in range(i+1, self.n):
+                if M[i, j] != 0 or M[j, i] != 0:
+                    L = M[i, j] + M[j, i]
+                    M[i, j] = M[i, j] / L
+                    M[j, i] = M[j, i] / L
+                    
         # d = np.count_nonzero(M, 1)
         d_max = np.max(np.sum(M,1))
         d = np.ones((self.n,)) * d_max
@@ -104,3 +123,17 @@ class RankCentrality():
 
         return M, d
 
+    def compute_stationary_distribution(self, M, init_pi=None, max_iters=10000, eps=1e-6, return_iter_count=False):
+        if init_pi is None:
+            pi = np.ones((1,self.n)) * 1./self.n
+        else:
+            pi = init_pi
+        
+        for it in range(max_iters):
+            pi_ = pi @ M
+            if np.linalg.norm(pi_ - pi) < eps:
+                break
+            pi = pi_
+        if return_iter_count:
+            return pi, it
+        return pi

@@ -129,3 +129,29 @@ def generate_time_varying_rum_comparisons(U_all, noise, L=100, p0=None, seed=Non
     return data_by_time
 
 
+def generate_comparisons_with_P(P, pairs, L=100):
+    comparisons = []
+    for (i, j) in pairs:
+        num_wins_i = np.random.binomial(L, P[j, i])
+        for _ in range(num_wins_i):
+            comparisons.append((i, j))
+        for _ in range(L - num_wins_i):
+            comparisons.append((j, i))
+    
+    return comparisons
+
+def estimate_pairwise_comparison_probs(rankings, n):
+    P = np.eye(n) * 1./2
+    
+    for ranking in rankings:
+        for idi, i in enumerate(ranking[:-1]):
+            for j in ranking[idi+1:]:
+                P[j, i] += 1
+                
+    for i in range(n-1):
+        for j in range(i+1, n):
+            M = P[i, j] + P[j,i]
+            P[i, j] = P[i, j] / M
+            P[j, i] = P[j, i] / M
+    
+    return P

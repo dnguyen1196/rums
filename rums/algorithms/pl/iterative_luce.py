@@ -13,7 +13,7 @@ class RegularizedILSR():
         self.nu = nu # Regularization to avoid the 'rare and bad' item situation
         self.iteration_counts = []
 
-    def fit(self, ranked_data, max_iters=100, eps=1e-6, max_iters_mc=10000, eps_mc=1e-6, sample_weights=None, theta_init=None, verbose=False):
+    def fit_old(self, ranked_data, max_iters=100, eps=1e-6, max_iters_mc=10000, eps_mc=1e-6, sample_weights=None, theta_init=None, verbose=False):
 
         start = time.time()
         if verbose:
@@ -200,7 +200,7 @@ class RegularizedILSR():
         if verbose:
             print("Running ILSR ... ")
 
-        for it in range(max_iters):
+        for it in range(int(max_iters)):
             # Construct Markov chain
 
             start = time.time()
@@ -209,7 +209,7 @@ class RegularizedILSR():
 
             # Compute stationary distribution
             start = time.time()
-            pi_, iter_counts = self.compute_stationary_distribution(M, max_iters_mc, eps_mc, return_iter_count=True)
+            pi_, iter_counts = self.compute_stationary_distribution(M, pi, max_iters_mc, eps_mc, return_iter_count=True)
             mc_convergence_time = time.time() - start
             self.iteration_counts.append(iter_counts)
 
@@ -234,8 +234,12 @@ class RegularizedILSR():
         self.theta = np.copy(theta)
         return theta
 
-    def compute_stationary_distribution(self, M, max_iters=10000, eps=1e-6, return_iter_count=False):
-        pi = np.ones((1,self.n))
+    def compute_stationary_distribution(self, M, init_pi=None, max_iters=10000, eps=1e-6, return_iter_count=False):
+        if init_pi is None:
+            pi = np.ones((1,self.n)) * 1./self.n
+        else:
+            pi = init_pi
+        
         for it in range(max_iters):
             pi_ = pi @ M
             if np.linalg.norm(pi_ - pi) < eps:
