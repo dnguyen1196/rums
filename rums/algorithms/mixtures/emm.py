@@ -56,6 +56,7 @@ class EMM():
         return U, alpha
 
     def random_init(self, rankings):
+        # This seems to make the convergence too random?
         alpha = np.ones((self.K,)) * 1./self.K
         U_all = np.random.normal(size=(self.K, self.n))
         U_all = U_all - np.mean(U_all, 1)[:, np.newaxis]
@@ -205,17 +206,17 @@ def _mm_rankings_acc(n_items, rankings, win_matrix, data_weights, params):
 
     for idx, ranking in enumerate(rankings):
         # This should be of size
-        # cum_weights_sum = np.cumsum(weights.take(ranking)[::-1])[::-1]
-        # cum_weights_sum = np.cumsum(1./cum_weights_sum) # cum_weights_sum[i] = sum_{0 to i} 1./sum(weights for items below j)
-        # cum_weights_sum[-1] = cum_weights_sum[-2]
-        # denoms[ranking] += data_weights[idx] * cum_weights_sum
-        sum_ = weights.take(ranking).sum()
-
-        for i, winner in enumerate(ranking[:-1]):
-            wins[winner] += data_weights[idx]
-            val = data_weights[idx] / sum_
-            denoms[ranking[i:]] += val
-            sum_ -= weights[winner]
+        cum_weights_sum = np.cumsum(weights.take(ranking)[::-1])[::-1]
+        cum_weights_sum = np.cumsum(1./cum_weights_sum) # cum_weights_sum[i] = sum_{0 to i} 1./sum(weights for items below j)
+        cum_weights_sum[-1] = cum_weights_sum[-2]
+        denoms[ranking] += data_weights[idx] * cum_weights_sum
+        
+        # sum_ = weights.take(ranking).sum()
+        # for i, winner in enumerate(ranking[:-1]):
+        #     wins[winner] += data_weights[idx]
+        #     val = data_weights[idx] / sum_
+        #     denoms[ranking[i:]] += val
+        #     sum_ -= weights[winner]
 
     return wins, denoms
 

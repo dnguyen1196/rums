@@ -61,140 +61,7 @@ def m_function_v2(U_not0, X_with_0, X_without_0, X_allpair_not0, q, F, F_prime, 
     
     return -f, -grad # Note we're doing minimization, thus the negative signs
 
-
-class ClusterThenEstimate():
-    def __init__(self, n, K, kernel=None, cluster_algo="spectral",
-            phi=None, F=None, F_prime=None):
-        self.n = n
-        self.K = K
-        self.embedding = PairwiseEmbedding(n)
-        assert(cluster_algo in ["spectral", "sdp"])
-        self.cluster_algo = cluster_algo
-        self.kernel = kernel
-        self.phi = phi
-        self.F = F
-        self.F_prime = F_prime
-        self.opt_solver = "SLSQP"
-        
-    def fit(self, Pi):
-        X = self.embedding.fit(Pi)
-        yhat, mus = self.cluster(X)
-        # print(X)
-        # print(yhat)
-        U_hat = []
-        mu_hat = []
-        self.alpha = []
-        
-        # Estimate the initial U's by solving an optimization problem
-        for k in range(self.K):
-            # Get the clustered data
-            # Xk = X[np.where(yhat == k)[0],:]
-            self.alpha.append(len(X[np.where(yhat == k)[0],:]))
-            
-            # # Estimate the center
-            # muk = np.mean(Xk, 0)
-            muk = mus[k, :]
-            
-            mu_hat.append(muk)
-            # print(muk)
-            P = np.eye(self.n)
-            P[np.triu_indices(self.n, 1)] = muk
-            P = -P.T + P
-            P += 1./2
-            # print(P)
-
-            # Remove extreme values to avoid numerical issues
-            P = np.where(P > 0.999, 0.999, P)
-            P = np.where(P < 0.001, 0.001, P)
-
-            np.fill_diagonal(P, 0.5)
-            Mk = self.phi(P)
-            svd = TruncatedSVD(2)
-            M_approx = svd.fit_transform(Mk)
-            M_approx = M_approx @ svd.components_
-            Uk = M_approx[0, :]
-            
-            # Obtain the initial estimate
-            Uk = -(Uk - np.average(Uk)) 
-            
-            # Then refine furthermore via optimization
-            # Uk = self.inference(Xk, Uk)
-            Uk = self.inference_from_pairwise_probs(P, Uk)
-            
-            U_hat.append(Uk)
-        
-        self.U_all = U_hat
-        self.alpha /= np.sum(self.alpha)
-        
-        return np.array(U_hat)
-    
-    def spectral_clustering(self, X):
-        U, s, Vh = svd(X, full_matrices=False)
-        s[self.K:] = 0
-        Sigma = np.diag(s)
-        Y = (U @ Sigma) @ Vh
-        assert(Y.shape == X.shape)
-        
-        clustering = KMeans(self.K)
-        clustering.fit(Y)
-        
-        return clustering.labels_, clustering.cluster_centers_    
-    
-    def cluster(self, X):
-        return self.spectral_clustering(X)
-    
-    
-    def inference(self, X, U):
-        X_allpair = []
-        for l in range(len(X)):
-            xl_allpair = np.zeros((self.n, self.n))
-            xl_allpair[np.triu_indices(self.n, 1)] = X[l, :]
-            xl_allpair = (0 - xl_allpair.T) + xl_allpair
-            X_allpair.append(xl_allpair.flatten())
-        X_allpair = np.array(X_allpair)
-        
-        m = len(X)
-        
-        def m_function(Uk):
-            Udelta_full = np.outer(Uk, np.ones((self.n,))) - np.outer(np.ones((self.n,)), Uk)
-            Ukdelta = Udelta_full[np.triu_indices(self.n, 1)]
-            f = -1./m * np.sum(np.log(self.F(2 * X * Ukdelta))) # Function value (negative Q)
-            
-            Ukdelta = Udelta_full.flatten() # Flatten (Row wise)
-            
-            # should have shape (m, n**2)
-            unweighted_grad = 2 * X_allpair * self.F_prime(2 * X_allpair * Ukdelta)/ self.F(2 * X_allpair * Ukdelta)
-            weighted_grad = unweighted_grad # Should still have shape (m, n**2) 
-            weighted_grad = np.sum(weighted_grad, 0) # Should have shape (n**2, )
-            
-            # Turn into a square (n, n)
-            weighted_grad = np.reshape(weighted_grad, (self.n, self.n))
-            grad = np.sum(weighted_grad, 1) # Take sum along the column
-            
-            return f, -1./m * grad # Note we're doing minimization, thus the negative signs
-        
-        constraint = LinearConstraint(np.ones((1, self.n)), 0, 0)
-        res = minimize(m_function, U, method=self.opt_solver, constraints=[constraint], jac=True)
-        U = res["x"]
-        return U - np.mean(U)
-    
-    def inference_from_pairwise_probs(self, P, U0):
-        # Estimate the parameter using the estimated centers
-        np.fill_diagonal(P, 0)
-        
-        def m_function(Uk):
-            Udelta_full = np.outer(Uk, np.ones((self.n,))) - np.outer(np.ones((self.n,)), Uk)
-            f = - np.sum(P * np.log(self.F(Udelta_full)))
-            unweighted_grad = P * self.F_prime(Udelta_full)/self.F(Udelta_full)
-            grad = np.sum(unweighted_grad, 1) 
-            return f, -grad
-        
-        constraint = LinearConstraint(np.ones((1, self.n)), 0, 0)
-        res = minimize(m_function, U0, method=self.opt_solver, constraints=[constraint], jac=True)
-        U = res["x"]
-        return U - np.mean(U)
-    
-    
+ 
 class SpectralSurrogateEM():
     def __init__(self, n, K, kernel=None, init_method="spectral",
             phi=None, F=None, F_prime=None, step_size=0.1, em_method="exact_v1",
@@ -502,32 +369,7 @@ class SpectralSurrogateEM():
         log_lik = np.mean(logsumexp(joint_log_lik, 1))
         return qz, log_lik
     
-    
-    def surrogate_e_step_entropic_regularized(self, X, U, alpha):
-        # Following http://www.cs.cmu.edu/~tom/10-702/Zoubin-702.pdf
-        # Estimate the log joint likelihood
-        m = len(X)
-        d = len(X[0]) # (n choose 2)
-        joint_log_lik = np.zeros((m, self.K))
-        for k in range(self.K):
-            log_lik = self.conditional_log_likelihood_pairwise(U[k, :], X)
-            joint_log_lik[:, k] = log_lik + np.log(alpha[k])
-        
-        qz = cp.Variable((m,self.K))
-        obj = cp.sum(cp.multiply(qz, joint_log_lik)) + cp.sum(cp.entr(qz))
-        constraints = [
-            qz @ np.ones((self.K,)) == np.ones((m,)), # Normalization constraint,
-            qz <= 1.,
-            qz >= 0.
-        ]
-        prob = cp.Problem(cp.Maximize(obj), constraints)
-        prob.solve(verbose=False)
-        qz = qz.value
-        assert(qz.shape == (m, self.K))
-        log_lik = np.sum(qz * joint_log_lik)
-        return qz, log_lik
-    
-    
+
     def construct_x_allpair(self, X):
         X_allpair = []
         if not self.v2:
@@ -651,162 +493,179 @@ class SpectralSurrogateEM():
         Uk_next = np.concatenate((np.array([0]), Uk_sub_next))
         return Uk_next - np.mean(Uk_next)
             
-    ######################################################################################   
-    #
-    #                                       First order M-step
-    #
-    ######################################################################################
-    
-    def surrogate_first_order_em(self, X, U_init):
-        U = U_init
-        alpha = np.ones((self.K,)) / self.K
+            
+class EM_CML():
+    """ EM algorihtm for learning a mixture of Plackett-Luce models
+    """
+    def __init__(self, n, K, gradient_scale=1, opt_solver="SLSQP", sigma=1.):
+        self.n = n
+        self.K = K
+        self.U_array = []
+        self.alpha = []
+        self.gradient_scale = gradient_scale
+        self.opt_solver = opt_solver
+        self.sigma = sigma
+        self.phi = lambda p: np.log(p/(1-p))
+        self.F = lambda x: 1./(1+np.exp(-x/sigma))
+        self.F_prime = lambda x: np.exp(-x/sigma) / (sigma * (1 + np.exp(-x/sigma))**2)
+        self.embedding = PairwiseEmbedding(n)
+        self.p_epsilon = 0.01
+        self.lambd = 0.
+        
+        
+    def fit(self, rankings, U=None, alpha=None, max_iters=500, tol=1e-5):
+        # How to obtain the initial estimate?
+        X = self.embedding.fit(rankings)
         X_allpair = self.construct_x_allpair(X)
-        
-        for _ in range(self.max_iters):
-            gradU, log_lik = self.first_order_em_step(X, X_allpair, U, alpha)
-            U = U + self.step_size * gradU # Consider dynamic step size
-            
-            # Normalize the partworths to sum to 0
-            U = U - np.mean(U, 1)[:, np.newaxis]
-            
-            if len(self.U_track) > 0 and np.linalg.norm(U - self.U_track[-1], "fro") < self.tol:
-                self.log_lik_track.append(log_lik)
-                self.U_track.append(U)
-                break
+        alpha_est = None
 
-            self.log_lik_track.append(log_lik)
-            self.U_track.append(U)
+        U, alpha_est = self.initialize_spectral(X)
+            
+        if alpha is None and alpha_est is None:
+            alpha = np.ones((self.K,)) * 1./self.K
+        if alpha_est is not None:
+            alpha = alpha_est
         
-        return U
+        self.U_array  = [U]
+        self.alpha_track = [alpha]
         
-    def gradient_q_func(self, X_allpair, Uk, qzk):
-        # Compute the gradient with respect to U
-        m = len(X_allpair)
-        
-        Ukdelta = np.outer(Uk, np.ones((self.n, ))) - np.outer(np.ones((self.n,)), Uk)
-        Ukdelta = Ukdelta.flatten() # Flatten (Row wise)
-        
-        # should have shape (m, n**2)
-        unweighted_grad = 2 * X_allpair * self.F_prime(2 * X_allpair * Ukdelta)/ self.F(2 * X_allpair * Ukdelta)
-        weighted_grad = unweighted_grad * qzk[:, np.newaxis] # Should still have shape (m, n**2) 
+        for _ in range(max_iters):
+            qz = self.e_step(rankings, U, alpha)
+            alpha = np.mean(qz, 0)
+            U = self.m_step(U, X, X_allpair, qz)
+            self.U_array.append(U)
+            self.alpha_track.append(alpha)
+            
+            if len(self.U_array) > 0 and np.linalg.norm(U - self.U_array[-1], "fro") < tol:
+                break
+            
+        self.U = np.copy(U)
+        self.alpha = np.copy(alpha)
+        return U, alpha
+    
+    
+    def log_lik_pairwise(self, Uk, P):
+        # Return the pairwise log-likelihood
+        Udelta_full = np.outer(Uk, np.ones((self.n,))) - np.outer(np.ones((self.n,)), Uk)
+        f = - np.sum(P * np.log(self.F(Udelta_full)))
+        unweighted_grad = P * self.F_prime(Udelta_full)/self.F(Udelta_full)             
+        grad = np.sum(unweighted_grad, 1)
+        return f, -self.gradient_scale * grad
+    
+    
+    def log_like_pairwise_soft(self, Uk, X, X_allpair, qzk):
+        Ukdelta_full = np.outer(Uk, np.ones((self.n,))) - np.outer(np.ones((self.n,)), Uk)
+        Ukdelta = Ukdelta_full[np.triu_indices(self.n, 1)]
+        Ukdelta_full_flatten = Ukdelta_full.flatten() # Flatten (Row wise)
+
+        f = -1./len(X) * np.sum(np.log(self.F(2 * X * Ukdelta)) * qzk[:, np.newaxis]) - self.lambd * np.sum(np.square(Uk)) # Function value (negative Q)
+        unweighted_grad =  2 * X_allpair * self.F_prime(2 * X_allpair * Ukdelta_full_flatten)/ self.F(2 * X_allpair * Ukdelta_full_flatten)
+
+        weighted_grad = unweighted_grad * qzk[:, np.newaxis] # Should still have shape (m, n**2)
         weighted_grad = np.sum(weighted_grad, 0) # Should have shape (n**2, )
         
         # Turn into a square (n, n)
         weighted_grad = np.reshape(weighted_grad, (self.n, self.n))
-        grad = np.sum(weighted_grad, 1) # Take sum along the column
-        return 1./m * grad
-    
-    def first_order_em_step(self, X, X_allpair, U, alpha):
-        qz, log_lik = self.surrogate_e_step(X, U, alpha)
+        # Zero out the diagonal because we also have F_prime(0) which may not be zero
+        np.fill_diagonal(weighted_grad, 0)
         
-        # Compute gradient
-        U_grad = []
+        grad = -1./len(X) * np.sum(weighted_grad, 1) # Take row sums
+        grad += self.lambd * 0.5 * Uk # Gradient from the regularization term
+        return f, grad # Note we're doing minimization, thus the negative signs
+       
+    def construct_x_allpair(self, X):
+        X_allpair = []
+        # if not self.v2:
+        for l in range(len(X)):
+            xl_allpair = np.zeros((self.n, self.n))
+            xl_allpair[np.triu_indices(self.n, 1)] = X[l, :]
+            xl_allpair = (0 - xl_allpair.T) + xl_allpair
+            X_allpair.append(xl_allpair.flatten())
+        X_allpair = np.array(X_allpair)
+
+        return X_allpair    
+    
+    def initialize_spectral(self, X):
+        # Run spectral clustering algorithm to obtain initial estimate
+        y_hat, mu_hat = self.spectral_clustering(X)
+        U_all_est = []
+        alpha = []
         for k in range(self.K):
-            partial_Uk = self.gradient_q_func(X_allpair, U[k, :], qz[:, k])
-            U_grad.append(partial_Uk)
+            muk = mu_hat[k, :]
+            alpha_k = len(np.where(y_hat == k)[0])
+            alpha.append(alpha_k)
             
-        return np.array(U_grad), log_lik
-    
-    ######################################################################################   
-    #
-    #                                   Surrogate EM
-    #
-    ######################################################################################
-     
-    def surrogate_hybrid_em(self, X, U_init):
-        # First do the exact surrogate EM to obtain a good estimate
-        U = self.surrogate_exact_em(X, U_init)
-        # Then run first order EM
-        return self.surrogate_first_order_em(X, U)
-    
-    
-class SpectralPairwiseSurrogateEM(SpectralSurrogateEM):
-    def __init__(self, n, K, kernel=None, init_method="spectral",
-            phi=None, F=None, F_prime=None, step_size=1.,
-            opt_solver="SLSQP", lambd=1.,
-            tol=1e-3, max_iters=1000, use_spectral_centers=True, include_priors=True):
-        super(SpectralPairwiseSurrogateEM, self).__init__(n, K, kernel=kernel, init_method=init_method, em_method="exact_v1",
-            phi=phi, F=F, F_prime=F_prime, step_size=step_size, opt_solver=opt_solver, tol=tol, max_iters=max_iters, 
-            use_spectral_centers=use_spectral_centers, lambd=lambd)
-        self.include_priors = include_priors
-    
-    
-    def surrogate_em_step(self, X, X_allpair, U, alpha, X_with_0=None, X_without_0=None):
-        qz, log_lik = self.surrogate_e_step(X, U, alpha)
-        alpha = np.ones((self.K,)) * 1./self.K # TODO: fix this
+            # Estimate the center pairwise probabilities
+            P = np.eye(self.n)
+            P[np.triu_indices(self.n, 1)] = muk  
+            P = -P.T + P
+            P += 1./2
+            
+            # Remove extreme values to avoid numerical issues
+            P = np.where(P > 1-self.p_epsilon, 1-self.p_epsilon, P)
+            P = np.where(P < self.p_epsilon, self.p_epsilon, P)
+
+            np.fill_diagonal(P, 0.5)
+            Mk = self.phi(P)
+            svd = TruncatedSVD(2)
+            M_approx = svd.fit_transform(Mk)
+            M_approx = M_approx @ svd.components_
+            Uk = M_approx[0, :]
+            
+            # Obtain the initial estimate
+            Uk = -(Uk - np.average(Uk))
+            
+            constraint = LinearConstraint(np.ones((1, self.n)), 0, 0)
+            res = minimize(self.log_lik_pairwise, Uk, constraints=[constraint], args=(P), jac=True, method=self.opt_solver)
+            Uk = res["x"]
+            U_all_est.append(Uk - np.mean(Uk))
+            
+        alpha = np.array(alpha)
+        alpha = alpha/ np.sum(alpha)
+            
+        return np.array(U_all_est), alpha      
         
-        U_next = []
+    def spectral_clustering(self, X):
+        U, s, Vh = svd(X, full_matrices=False)
+        s[self.K:] = 0
+        Sigma = np.diag(s)
+        Y = (U @ Sigma) @ Vh
+        assert(Y.shape == X.shape)
+        
+        clustering = KMeans(self.K)
+        clustering.fit(Y)
+        
+        return clustering.labels_, clustering.cluster_centers_
+    
+    def e_step(self, rankings, U_all, alpha):
+        m = len(rankings)
+        K = len(U_all)
+        qz = np.zeros((m, K))
+        for k in range(K):
+            qz[:, k] = self.estimate_log_likelihood_pl(rankings, U_all[k]) + np.log(alpha[k])
+        return softmax(qz, 1)
+    
+    def estimate_log_likelihood_pl(self, rankings, U):
+        pi = softmax(U)
+        log_likelihoods = []
+        for ranking in rankings:
+            pi_sigma = np.array([pi[i] for i in ranking])
+            # Use cumsum here
+            sum_pi = np.cumsum(pi_sigma[::-1])[::-1]
+            log_lik = np.log(pi_sigma/sum_pi)
+            log_lik = np.sum(log_lik[:-1])
+            log_likelihoods.append(log_lik)
+        return np.array(log_likelihoods)
+  
+    def m_step(self, U_all, X, X_allpair, qz):
+        U_all_est = []
         for k in range(self.K):
-            Uk_next = self.exact_m_step(X, qz[:, :, k], U[k, :], X_allpair)
-            U_next.append(Uk_next)
-        
-        return np.array(U_next), log_lik, alpha
+            # Same as surrogate EM
+            constraint = LinearConstraint(np.ones((1, self.n)), 0, 0)            
+            res = minimize(self.log_like_pairwise_soft, U_all[k, :], constraints=[constraint], args=(X, X_allpair, qz[:, k]), jac=True, method=self.opt_solver)
+            Uk = res["x"]
+            U_all_est.append(Uk - np.mean(Uk))
+            
+        return np.array(U_all_est)
     
     
-    def exact_m_step(self, X, qzk, Uk, X_allpair):
-        m, d = qzk.shape
-        n = len(Uk)
-        qzk_allpair = np.zeros((m, self.n, self.n))
-        
-        for l in range(m):
-            qzk_allpair[l][np.triu_indices(self.n, 1)] = qzk[l, :]
-        
-        qzk_allpair = qzk_allpair + np.transpose(qzk_allpair, (0,2,1)) # This should have shape (m, n, n) still
-        qzk_allpair = np.reshape(qzk_allpair, (m, self.n**2))
-        
-        def q_function(Uk):
-            Ukdelta_full = np.outer(Uk, np.ones((self.n,))) - np.outer(np.ones((self.n,)), Uk)
-            Ukdelta = Ukdelta_full[np.triu_indices(self.n, 1)]
-            phi = np.log(self.F(2 * X * Ukdelta)) * self.W # This should have shape (m, d)
-            # qzk have shape (m, d)
-            E_qzk_phi = qzk * phi # This should have shape (m, d)
-            f = -np.mean(np.sum(E_qzk_phi, 1)) + self.lambd * np.sum(np.square(Uk)) # Function evaluation
-            
-            # Now compute the derivative
-            Ukdelta_full = Ukdelta_full.flatten() 
-            unweighted_grad = 2 * X_allpair  * self.F_prime(2 * X_allpair * Ukdelta_full) / self.F(2 * X_allpair * Ukdelta_full) * self.W_full # This has shape (m, n*2)
-            weighted_grad = qzk_allpair * unweighted_grad
-            weighted_grad = np.reshape(weighted_grad, (m, self.n, self.n))
-            
-            for l in range(m):
-                np.fill_diagonal(weighted_grad[l], 0)
-            
-            # np.fill_diagonal(weighted_grad, 0)
-            grad = np.sum(weighted_grad, 2) # This should have shape (m, n)
-            grad = -np.mean(grad, 0) # This should have shape (n,)
-            grad += 0.5 * self.lambd * Uk # Normalization term
-            return f, grad
-        
-        constraint = LinearConstraint(np.ones((1, self.n)), 0, 0)        
-        res = minimize(q_function, Uk, method=self.opt_solver, constraints=[constraint], jac=True)
-        Uk_next = res["x"]
-        return Uk_next - np.mean(Uk_next) # Return the normalized partworths
-            
-        
-    def surrogate_e_step(self, X, U, alpha):
-        m, d = X.shape
-        K, n = U.shape
-        
-        q_approximate = np.zeros((m, d, K))
-        
-        for k in range(self.K):
-            Uk = U[k, :]
-            Udelta = np.outer(Uk, np.ones((self.n,))) - np.outer(np.ones((self.n,)), Uk)
-            Udelta = Udelta[np.triu_indices(self.n, 1)]
-            # Compute log-likelihood for each pair P(Yij, z|Theta)
-            if self.weighted_pair:
-                joint_log_lik = np.log(self.F(2 * X * Udelta)) * self.W # This should have shape (m, d)
-            else:
-                joint_log_lik = np.log(self.F(2 * X * Udelta)) * self.kappa_weight # This should have shape (m,d)
-            
-            if self.include_priors:
-                joint_log_lik = joint_log_lik + np.log(alpha[k])
-            q_approximate[:, :, k] = joint_log_lik
-        
-        # Take soft-max of the log likelihood 
-        q_approximate = softmax(q_approximate, 2) 
-        assert(q_approximate.shape == (m, d, K))
-        
-        log_lik_yij = np.sum(q_approximate, 2) # This should have shape (m, d)
-        log_lik = np.mean(np.sum(np.log(log_lik_yij), 1)) # This should have shape ()
-        return q_approximate, log_lik

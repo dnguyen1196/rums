@@ -53,9 +53,8 @@ class RankCentrality():
         return self.theta
     
     
-    def fit_from_pairwise_probabilities(self, P, max_iters_mc=10000, eps_mc=1e-6, theta_init=None, verbose=False):
-        M = np.where(np.logical_or((P != 0), (P.T != 0)), P+eps_mc, P) # Add a very small regularization
-        # M = P
+    def fit_from_pairwise_probabilities(self, P, max_iters_mc=10000, lambd_mc=0., eps_mc=1e-8, theta_init=None, verbose=False):
+        M = np.where(np.logical_or((P != 0), (P.T != 0)), P+lambd_mc, P) # Add a very small regularization
         np.fill_diagonal(M, 0)
         d_max = np.max(np.sum(M,1))
         d = np.ones((self.n,)) * d_max

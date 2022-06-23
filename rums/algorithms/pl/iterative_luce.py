@@ -146,24 +146,33 @@ class RegularizedILSR():
             sample_weights = np.ones((m,))
 
         M = np.zeros((self.n, self.n))
-        # Pre compute pi^T Sk
-        piSk = np.zeros((self.n, m))
-        for i in range(self.n):
-            temp = (pi @ S_choice_tensor[i, :, :]).flatten()
-            # piSk[i, :] = np.nan_to_num(1./ temp)
-            # Skip division by zero
-            piSk[i, :] = np.divide(1, temp, out=np.zeros_like(temp), where=temp!=0)
-
+        
+        # Pre compute pi^T Sk (Old version)
+        # piSk = np.zeros((self.n, m))
+        # for i in range(self.n):
+        #     temp = pi @ S_choice_tensor[i, :, :]
+        #     # Skip division by zero
+        #     # This gives, piSk[i, l] = 1./(w(A_l))
+        #     piSk[i, :] = np.divide(1, temp, out=np.zeros_like(temp), where=temp!=0)
+        # piSk_old = np.copy(piSk)
+        
+        # Accelerated version
+        temp = pi @ S_choice_tensor
+        piSk = np.divide(1, temp, out=np.zeros_like(temp), where=temp!=0)        
 
         # Now we have to zero out all the S_choice_tensor[i, i, :]
         for i in range(self.n):
             S_choice_tensor[i, i, :] = np.zeros((m,))
 
-        for i in range(self.n):
-            for j in range(self.n):
-                if i != j:
-                    M[i, j] = np.sum(np.multiply(np.multiply(sample_weights, S_choice_tensor[j, i, :]), piSk[j, :]))
-
+        # Old version
+        # for i in range(self.n):
+        #     for j in range(self.n):
+        #         if i != j:
+        #             M[i, j] = np.sum(np.multiply(np.multiply(sample_weights, S_choice_tensor[j, i, :]), piSk[j, :]))
+        # Accelerated version
+        M = (np.transpose(sample_weights * S_choice_tensor, (1, 0, 2)) * piSk).sum(-1)
+        np.fill_diagonal(M, 0)
+        
         # Check everypair where if i flows into j, j should also have back flow 
         M = np.where(np.logical_or((M != 0), (M.T != 0)), M+self.nu, M)
 
@@ -204,7 +213,7 @@ class RegularizedILSR():
             # Construct Markov chain
 
             start = time.time()
-            M, d = self.construct_markov_chain_accelerated(choice_tensor, pi, sample_weights)
+            M, d = self.construct_markov_chain_accelerated(choice_tensor, pi.flatten(), sample_weights)
             mc_construction_time = time.time() - start
 
             # Compute stationary distribution

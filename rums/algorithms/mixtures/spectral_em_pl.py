@@ -11,7 +11,7 @@ import time
 from scipy.optimize import LinearConstraint, minimize
 
 class SpectralEM():
-    def __init__(self, n, K, lambd=1., nu=1., ilsr_max_iters=1, gmm_lambd=0.01, init_method="rc"):
+    def __init__(self, n, K, lambd=1., nu=1., ilsr_max_iters=1, gmm_lambd=0.01, init_method="rc", init_param={}, extra_refinement=False):
         self.n = n
         self.K = K
         self.lambd = lambd
@@ -25,6 +25,8 @@ class SpectralEM():
         self.gmm_lambd = gmm_lambd
         assert (init_method in ["rc", "gmm", "cluster"])
         self.init_method = init_method
+        self.init_param = init_param
+        self.extra_refinement = extra_refinement
 
     def fit(self, rankings, U_init=None, max_iters=100, eps=1e-4, verbose=False):
         if U_init is None:
@@ -49,6 +51,22 @@ class SpectralEM():
             print("Starting EM from initial solution ... ")
             start = time.time()
 
+        U, alpha = self.em(rankings, U, alpha, eps, max_iters, verbose)
+        
+        # If doing extra refinement
+        if self.extra_refinement:
+            self.ilsr_max_iters = 100 # Run more iterations
+            U, alpha = self.em(rankings, U, alpha, eps, max_iters, verbose)
+
+        if verbose:
+            print(f"EM took {time.time() - start} seconds to converge, after {len(self.U_array)} iterations")
+
+        self.U = np.copy(U)
+        self.alpha = np.copy(alpha)
+        return U, alpha
+    
+    
+    def em(self, rankings, U, alpha, eps=1e-5, max_iters=1000, verbose=False):
         for it in range(max_iters):
             start = time.time()
             qz = self.e_step(rankings, U, alpha)
@@ -75,11 +93,6 @@ class SpectralEM():
                 break
             U = U_
 
-        if verbose:
-            print(f"EM took {time.time() - start} seconds to converge, after {len(self.U_array)} iterations")
-
-        self.U = np.copy(U)
-        self.alpha = np.copy(alpha)
         return U, alpha
     
     def spectral_init(self, rankings, verbose=False):
@@ -98,6 +111,7 @@ class SpectralEM():
                 rankings_k = [ranking for idpi, ranking in enumerate(rankings) if clusters[idpi] == k]
                 lsr = RegularizedILSR(self.n, self.lambd, self.nu)
                 Uk = lsr.fit_accelerated(rankings_k, max_iters=self.ilsr_max_iters)
+    
             elif self.init_method == "gmm":
                 # Use GMM to estimate the initial starting value, or why don't we use Rank Centrality to estimate initial?
                 Uk = self.gmm_estimate(mus[k, :])
@@ -119,7 +133,7 @@ class SpectralEM():
     def rc_estimate(self, mu):
         P = self.fill_in_center(mu)
         rc = RankCentrality(self.n)
-        return rc.fit_from_pairwise_probabilities(P)
+        return rc.fit_from_pairwise_probabilities(P, **self.init_param)
     
     def gmm_estimate(self, mu):
         P = self.fill_in_center(mu)
