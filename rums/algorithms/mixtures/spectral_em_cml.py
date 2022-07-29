@@ -509,8 +509,8 @@ class EM_CML():
         self.F = lambda x: 1./(1+np.exp(-x/sigma))
         self.F_prime = lambda x: np.exp(-x/sigma) / (sigma * (1 + np.exp(-x/sigma))**2)
         self.embedding = PairwiseEmbedding(n)
-        self.p_epsilon = 0.01
-        self.lambd = 0.
+        self.p_epsilon = 0.001
+        self.lambd = 0.001
         
         
     def fit(self, rankings, U=None, alpha=None, max_iters=500, tol=1e-5):

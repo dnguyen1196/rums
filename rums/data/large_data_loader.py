@@ -3,6 +3,8 @@ import scipy as sp
 import os
 import collections
 import nimfa
+import ast
+import torch as th
 
 
 def factorize(V, rank=30):
@@ -77,8 +79,31 @@ def rankings_from_completed_matrix(A_lr):
 
 
 
+def extract_sub_rankings(all_rankings, n_items, selected_size, seed=None):
+    sub_rankings = []
+    
+    if seed is not None:
+        print("Random seed given, selecting items at random")
+        np.random.seed(seed)
+        selected_items = np.random.choice(n_items, size=(selected_size), replace=False)
+    else:
+        print("Random seed not specified, picking items with highest variance in rankings ... ")
+        # Select the items with the highest variance in rankings
+        rankings_by_items = collections.defaultdict(list)
+        for ranking in all_rankings:
+            for r, item in enumerate(ranking):
+                rankings_by_items[item].append(r)
+        ranking_variances = [np.var(rankings_by_items[item]) for item in rankings_by_items.keys()]
+        selected_items = np.argsort(ranking_variances)[-selected_size:]
+        
+    idx_change = dict([(old_idx, new_idx) for new_idx, old_idx in enumerate(selected_items)])
+    
+    for rank in all_rankings:
+        sub_rankings.append([idx_change[item] for item in rank if item in selected_items])
+    return sub_rankings
+
+
 def ml_100k(seed=None, min_ratings_user=10, min_ratings_movie=10, low_rank=30, num_users=None, num_movies=None):
-    # TODO: load ranking data as well (ranked data determined by ratings)
     path = "datasets/ratings_datasets/ml-100k-ratings.csv"
     filename = os.path.join(os.path.dirname(os.path.realpath(__file__)), path)
     f = open(filename, 'r')
@@ -114,8 +139,18 @@ def ml_100k(seed=None, min_ratings_user=10, min_ratings_movie=10, low_rank=30, n
     return rankings_from_completed_matrix(A_lr)
 
 
-def ml_1m(seed=None, min_ratings_user=10, min_ratings_movie=10, low_rank=30, num_users=None, num_movies=None):
-    # TODO: load ranking data as well (ranked data determined by ratings)
+def ml_1m(seed=None, min_ratings_user=10, min_ratings_movie=10, low_rank=30, num_users=None, num_movies=None, preload=True):
+    if preload:
+        preload_path = "datasets/ratings_datasets/ml_1m_n=250_m=6039_preload.pkl"
+        preload_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), preload_path)
+        if os.path.exists(preload_path):
+            print("Preloaded dataset exists .. loading from there ")
+            all_rankings = th.load(preload_path)
+            all_items = list(range(len(all_rankings[0])))
+            if num_movies < len(all_items):
+                all_rankings = extract_sub_rankings(all_rankings, len(all_items), num_movies, seed)
+            return list(range(len(all_rankings[0]))), all_rankings
+        
     path = "datasets/ratings_datasets/ml-1m-ratings.dat"
     filename = os.path.join(os.path.dirname(os.path.realpath(__file__)), path)
     f = open(filename, 'r')
@@ -140,6 +175,130 @@ def ml_1m(seed=None, min_ratings_user=10, min_ratings_movie=10, low_rank=30, num
         ratings_count_user[user_id] += 1
         ratings_count_movie[movie_id] += 1
 
+    user_id_set = [user_id for user_id in user_id_set if ratings_count_user[user_id] > min_ratings_user]
+    movie_id_set = [movie_id for movie_id in movie_id_set if ratings_count_movie[movie_id] > min_ratings_movie]
+
+    A = construct_rating_matrix(ratings, user_id_set, movie_id_set, ratings_count_user, ratings_count_movie, num_users, num_movies)
+
+    # Learn a low rank approximation of the matrix
+    A_lr = lrmc(A, low_rank)
+    # Then produce an estimate ranking over all items
+    return rankings_from_completed_matrix(A_lr)
+
+
+
+def ml_10m(seed=None, min_ratings_user=10, min_ratings_movie=10, low_rank=30, num_users=None, num_movies=None, preload=True):
+    if preload:
+        preload_path = "datasets/ratings_datasets/ml_10m_n=300_m=69620_preload.pkl"
+        preload_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), preload_path)
+        if os.path.exists(preload_path):
+            print("Preloaded dataset exists .. loading from there ")
+            all_rankings = th.load(preload_path)
+            all_items = list(range(len(all_rankings[0])))
+            if num_movies < len(all_items):
+                all_rankings = extract_sub_rankings(all_rankings, len(all_items), num_movies, seed)
+            return list(range(len(all_rankings[0]))), all_rankings
+    
+    
+    path = "datasets/ratings_datasets/ml-10m-ratings.dat"
+    filename = os.path.join(os.path.dirname(os.path.realpath(__file__)), path)
+    f = open(filename, 'r')
+    
+    f.readline()
+    ratings = []
+    movie_id_set = set()
+    user_id_set = set()
+
+    ratings_count_user = collections.defaultdict(int)
+    ratings_count_movie = collections.defaultdict(int)
+
+    for line in f:
+        data = line.rstrip().split('::') # Note the separator
+        user_id = int(data[0])
+        movie_id = int(data[1])
+        rating = float(data[2])
+
+        movie_id_set.add(movie_id)
+        user_id_set.add(user_id)
+        ratings.append((user_id, movie_id, rating))
+        ratings_count_user[user_id] += 1
+        ratings_count_movie[movie_id] += 1
+
+    user_id_set = [user_id for user_id in user_id_set if ratings_count_user[user_id] > min_ratings_user]
+    movie_id_set = [movie_id for movie_id in movie_id_set if ratings_count_movie[movie_id] > min_ratings_movie]
+
+    A = construct_rating_matrix(ratings, user_id_set, movie_id_set, ratings_count_user, ratings_count_movie, num_users, num_movies)
+
+    # Learn a low rank approximation of the matrix
+    A_lr = lrmc(A, low_rank)
+    # Then produce an estimate ranking over all items
+    return rankings_from_completed_matrix(A_lr)
+
+
+def ml_20m(seed=None, min_ratings_user=10, min_ratings_movie=10, low_rank=30, num_users=None, num_movies=None):
+    # TODO: load ranking data as well (ranked data determined by ratings)
+    path = "datasets/ratings_datasets/ml-20m-ratings.csv"
+    filename = os.path.join(os.path.dirname(os.path.realpath(__file__)), path)
+    f = open(filename, 'r')
+    
+    f.readline()
+    ratings = []
+    movie_id_set = set()
+    user_id_set = set()
+
+    ratings_count_user = collections.defaultdict(int)
+    ratings_count_movie = collections.defaultdict(int)
+
+    for line in f:
+        data = line.rstrip().split(',') # Note the seperator
+        user_id = int(data[0])
+        movie_id = int(data[1])
+        rating = float(data[2])
+
+        movie_id_set.add(movie_id)
+        user_id_set.add(user_id)
+        ratings.append((user_id, movie_id, rating))
+        ratings_count_user[user_id] += 1
+        ratings_count_movie[movie_id] += 1
+
+    user_id_set = [user_id for user_id in user_id_set if ratings_count_user[user_id] > min_ratings_user]
+    movie_id_set = [movie_id for movie_id in movie_id_set if ratings_count_movie[movie_id] > min_ratings_movie]
+
+    A = construct_rating_matrix(ratings, user_id_set, movie_id_set, ratings_count_user, ratings_count_movie, num_users, num_movies)
+
+    # Learn a low rank approximation of the matrix
+    A_lr = lrmc(A, low_rank)
+    # Then produce an estimate ranking over all items
+    return rankings_from_completed_matrix(A_lr)
+
+
+def book_genome(seed=None, min_ratings_user=10, min_ratings_movie=10, low_rank=30, num_users=None, num_movies=None):
+    # {"item_id": 41335427, "user_id": 0, "rating": 5}
+    path = "datasets/ratings_datasets/book-genome-ratings.json"
+    filename = os.path.join(os.path.dirname(os.path.realpath(__file__)), path)
+    f = open(filename, 'r')
+    
+    ratings = []
+    movie_id_set = set()
+    user_id_set = set()
+
+    ratings_count_user = collections.defaultdict(int)
+    ratings_count_movie = collections.defaultdict(int)
+
+    for line in f:
+        # data = line.rstrip().split(',') # Note the seperator
+        data = ast.literal_eval(line.rstrip())
+
+        user_id = data["user_id"]
+        movie_id = data["item_id"]
+        rating = float(data["rating"])
+
+        movie_id_set.add(movie_id)
+        user_id_set.add(user_id)
+        ratings.append((user_id, movie_id, rating))
+        ratings_count_user[user_id] += 1
+        ratings_count_movie[movie_id] += 1
+        
     user_id_set = [user_id for user_id in user_id_set if ratings_count_user[user_id] > min_ratings_user]
     movie_id_set = [movie_id for movie_id in movie_id_set if ratings_count_movie[movie_id] > min_ratings_movie]
 

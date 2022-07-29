@@ -10,8 +10,9 @@ from scipy.special import softmax
 import time
 from scipy.optimize import LinearConstraint, minimize
 
+
 class SpectralEM():
-    def __init__(self, n, K, lambd=1., nu=1., ilsr_max_iters=1, gmm_lambd=0.01, init_method="rc", init_param={}, extra_refinement=False):
+    def __init__(self, n, K, lambd=1., nu=1., ilsr_max_iters=1, gmm_lambd=0.01, init_method="rc", init_param={}, extra_refinement=False, trimmed_llh=False, trimmed_threshold=None):
         self.n = n
         self.K = K
         self.lambd = lambd
@@ -23,10 +24,26 @@ class SpectralEM():
         self.ilsr_max_iters = ilsr_max_iters
         self.choice_tensor = None
         self.gmm_lambd = gmm_lambd
-        assert (init_method in ["rc", "gmm", "cluster"])
+        assert (init_method in ["rc", "gmm", "cluster", "lrmc"])
         self.init_method = init_method
         self.init_param = init_param
         self.extra_refinement = extra_refinement
+        self.trimmed_llh = trimmed_llh
+        self.trimmed_threshold = 1./(n**2) if trimmed_threshold is None else trimmed_threshold
+        
+    
+    def settings(self):
+        return {
+            "lambd" : self.lambd,
+            "nu" : self.nu,
+            "ilsr_max_iters": self.ilsr_max_iters,
+            "gmm_lambd" : self.gmm_lambd,
+            "init_method": self.init_method,
+            "extra_refinement": self.extra_refinement,
+            "trimmed_llh" : self.trimmed_llh,
+            "trimmed_threshold" : self.trimmed_threshold,
+        }
+    
 
     def fit(self, rankings, U_init=None, max_iters=100, eps=1e-4, verbose=False):
         if U_init is None:
@@ -115,6 +132,8 @@ class SpectralEM():
             elif self.init_method == "gmm":
                 # Use GMM to estimate the initial starting value, or why don't we use Rank Centrality to estimate initial?
                 Uk = self.gmm_estimate(mus[k, :])
+            elif self.init_method == "lrmc":
+                Uk = self.lrmc_estimate(mus[k, :])
             else:
                 # Or use RC to estimate the initial starting value
                 Uk = self.rc_estimate(mus[k, :])
@@ -161,6 +180,33 @@ class SpectralEM():
         U = res["x"]
         return U - np.mean(U)
 
+    def lrmc_estimate(self, mu):
+        P = self.fill_in_center(mu)
+        np.fill_diagonal(P, 0)
+        
+        mask = np.where(np.logical_or(P < 0.001, P > 0.999), 0, 1) # Only include pairs that are not extreme valued
+        M = np.log(P/(1.- P))
+        U = cp.Variable((self.n, 1))
+        reg_term = 0.5 * 0.001 * cp.square(cp.norm(U, 2))
+
+        # Is there an issue with indeterminate hessian here?
+        loss = cp.sum_squares(
+                    cp.multiply(
+                        mask,
+                        M - \
+                        (
+                            - U @ np.ones((1, self.n)) \
+                            + np.ones((self.n, 1)) @ U.T
+                        )
+                    )) + reg_term
+
+        objective = cp.Minimize(loss)
+        prob = cp.Problem(objective)
+        prob.solve()
+        U = U.value.flatten()
+        U = U - np.mean(U)
+        return U                
+
     def embed(self, rankings):
         # Embedd the rankings into {-1, +1} vectorization
         d = int(self.n * (self.n-1)/2)
@@ -204,7 +250,12 @@ class SpectralEM():
         qz = np.zeros((m, K))
         for k in range(K):
             qz[:, k] = self.estimate_log_likelihood_pl(rankings, U_all[k]) + np.log(alpha[k])
-        return softmax(qz, 1)
+        qz = softmax(qz, 1)
+        # Zero out very small posterior term
+        if self.trimmed_llh:
+            qz = np.where(qz < self.trimmed_threshold, 0, qz)
+            qz /= qz.sum(1)[:, np.newaxis] # Re-normalize
+        return qz
     
     def estimate_log_likelihood_pl(self, rankings, U):
         pi = softmax(U)

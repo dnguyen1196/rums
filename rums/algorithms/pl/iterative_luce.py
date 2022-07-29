@@ -141,12 +141,10 @@ class RegularizedILSR():
 
     def construct_markov_chain_accelerated(self, S_choice_tensor, pi, sample_weights=None):
         m = S_choice_tensor.shape[-1]
-
         if sample_weights is None:
             sample_weights = np.ones((m,))
-
-        M = np.zeros((self.n, self.n))
-        
+            
+        # M = np.zeros((self.n, self.n))
         # Pre compute pi^T Sk (Old version)
         # piSk = np.zeros((self.n, m))
         # for i in range(self.n):
@@ -155,21 +153,22 @@ class RegularizedILSR():
         #     # This gives, piSk[i, l] = 1./(w(A_l))
         #     piSk[i, :] = np.divide(1, temp, out=np.zeros_like(temp), where=temp!=0)
         # piSk_old = np.copy(piSk)
-        
-        # Accelerated version
-        temp = pi @ S_choice_tensor
-        piSk = np.divide(1, temp, out=np.zeros_like(temp), where=temp!=0)        
-
         # Now we have to zero out all the S_choice_tensor[i, i, :]
-        for i in range(self.n):
-            S_choice_tensor[i, i, :] = np.zeros((m,))
-
+        # for i in range(self.n):
+        #     S_choice_tensor[i, i, :] = np.zeros((m,))
         # Old version
         # for i in range(self.n):
         #     for j in range(self.n):
         #         if i != j:
         #             M[i, j] = np.sum(np.multiply(np.multiply(sample_weights, S_choice_tensor[j, i, :]), piSk[j, :]))
         # Accelerated version
+        
+        # Accelerated version
+        temp = pi @ S_choice_tensor
+        piSk = np.divide(1, temp, out=np.zeros_like(temp), where=temp!=0)        
+        # Now we have to zero out all the S_choice_tensor[i, i, :]
+        for i in range(self.n):
+            S_choice_tensor[i, i, :] = np.zeros((m,))
         M = (np.transpose(sample_weights * S_choice_tensor, (1, 0, 2)) * piSk).sum(-1)
         np.fill_diagonal(M, 0)
         
