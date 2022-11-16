@@ -128,7 +128,6 @@ def check_connectedness_undirected(G):
 
 def construct_comparison_graph_from_menus(menus):
     G = collections.defaultdict(list)
-
     for menu in menus:
         for i in list(menu):
             for j in list(menu):
@@ -136,3 +135,36 @@ def construct_comparison_graph_from_menus(menus):
                     G[i].append(j)
 
     return G
+
+
+def find_connected_components_from_menus(menus):    
+    # Construct a graph from the menus
+    # Then run multiple DFS to recover all the connected components
+    
+    vertices = set()
+    G = construct_comparison_graph_from_menus(menus)
+    visited_nodes = set()
+    unvisited_nodes = set(G.keys())
+    
+    def dfs(node: int, visited_nodes: set, unvisited_nodes: list,
+            connected_components: list):
+        
+        visited_nodes.add(node)
+        if node in unvisited_nodes:
+            unvisited_nodes.remove(node)
+        neighbors = G[node]
+        for neighbor in neighbors:
+            if neighbor not in visited_nodes:
+                dfs(neighbor, visited_nodes, unvisited_nodes, connected_components)
+        connected_components.append(node)
+    
+    connected_components = [] # This should return a list of items that belong in the same connected components, sorted in increasing index order
+
+    while len(unvisited_nodes) > 0:
+        connected_comp = []
+        dfs(list(unvisited_nodes)[0], visited_nodes, unvisited_nodes, connected_comp)
+        connected_components.append(sorted(connected_comp))
+    
+    return connected_components
+
+

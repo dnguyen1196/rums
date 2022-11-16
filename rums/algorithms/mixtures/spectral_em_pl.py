@@ -9,10 +9,12 @@ from sklearn.cluster import KMeans
 from scipy.special import softmax
 import time
 from scipy.optimize import LinearConstraint, minimize
+import faiss
+
 
 
 class SpectralEM():
-    def __init__(self, n, K, lambd=1., nu=1., ilsr_max_iters=1, gmm_lambd=0.01, init_method="rc", init_param={}, extra_refinement=False, trimmed_llh=False, trimmed_threshold=None):
+    def __init__(self, n, K, lambd=1., nu=1., ilsr_max_iters=1, gmm_lambd=0.01, init_method="lrmc", init_param={}, extra_refinement=False, trimmed_llh=False, trimmed_threshold=None, hard_e_step=False,):
         self.n = n
         self.K = K
         self.lambd = lambd
@@ -30,6 +32,7 @@ class SpectralEM():
         self.extra_refinement = extra_refinement
         self.trimmed_llh = trimmed_llh
         self.trimmed_threshold = 1./(n**2) if trimmed_threshold is None else trimmed_threshold
+        self.hard_e_step = hard_e_step
         
     
     def settings(self):
@@ -42,19 +45,21 @@ class SpectralEM():
             "extra_refinement": self.extra_refinement,
             "trimmed_llh" : self.trimmed_llh,
             "trimmed_threshold" : self.trimmed_threshold,
+            "hard_e_step": self.hard_e_step,
         }
-    
 
     def fit(self, rankings, U_init=None, max_iters=100, eps=1e-4, verbose=False):
         if U_init is None:
-            start = 0
             if verbose:
                 print("U_init not given, running spectral initialization ... ")
-                start = time.time()
+            start = time.time()
             U_init = self.spectral_init(rankings, verbose)
+            if verbose:
+                print("Spectral init took", time.time() - start)
 
         # Construct the choice tensor so we don't have to repeat this computation
-        self.choice_tensor = RegularizedILSR(self.n, self.lambd, self.nu).construct_choice_tensor(rankings)
+        if self.choice_tensor is None:
+            self.choice_tensor = RegularizedILSR(self.n, self.lambd, self.nu).construct_choice_tensor(rankings)
 
         assert(U_init.shape == (self.K, self.n))
         U = U_init
@@ -63,18 +68,14 @@ class SpectralEM():
         self.alpha_array.append(alpha)
         self.delta_array = [np.inf]
 
-        start = 0
+        start = time.time()
         if verbose:
             print("Starting EM from initial solution ... ")
-            start = time.time()
-
         U, alpha = self.em(rankings, U, alpha, eps, max_iters, verbose)
-        
-        # If doing extra refinement
+        # If doing extra refinement``
         if self.extra_refinement:
             self.ilsr_max_iters = 100 # Run more iterations
             U, alpha = self.em(rankings, U, alpha, eps, max_iters, verbose)
-
         if verbose:
             print(f"EM took {time.time() - start} seconds to converge, after {len(self.U_array)} iterations")
 
@@ -97,6 +98,7 @@ class SpectralEM():
 
             self.U_array.append(U)
             alpha = np.mean(qz, 0)
+            alpha /= np.sum(alpha) # Make sure that it's normalized
             self.alpha_array.append(alpha)
 
             if verbose:
@@ -123,12 +125,12 @@ class SpectralEM():
             print(f"Spectral Init: Spectral Clustering took {time.time() - start} seconds")
 
         U_all = []
+        start = time.time()
         for k in range(self.K):
             if self.init_method == "cluster":
                 rankings_k = [ranking for idpi, ranking in enumerate(rankings) if clusters[idpi] == k]
                 lsr = RegularizedILSR(self.n, self.lambd, self.nu)
-                Uk = lsr.fit_accelerated(rankings_k, max_iters=self.ilsr_max_iters)
-    
+                Uk = lsr.fit(rankings_k, max_iters=self.ilsr_max_iters)
             elif self.init_method == "gmm":
                 # Use GMM to estimate the initial starting value, or why don't we use Rank Centrality to estimate initial?
                 Uk = self.gmm_estimate(mus[k, :])
@@ -139,6 +141,8 @@ class SpectralEM():
                 Uk = self.rc_estimate(mus[k, :])
             
             U_all.append(Uk)
+        if verbose:
+            print(f"Learning after clustering took {time.time() - start} seconds")
         return np.array(U_all)
     
     def fill_in_center(self, mu):
@@ -187,7 +191,7 @@ class SpectralEM():
         mask = np.where(np.logical_or(P < 0.001, P > 0.999), 0, 1) # Only include pairs that are not extreme valued
         M = np.log(P/(1.- P))
         U = cp.Variable((self.n, 1))
-        reg_term = 0.5 * 0.001 * cp.square(cp.norm(U, 2))
+        reg_term = 0.5 * cp.square(cp.norm(U, 2))
 
         # Is there an issue with indeterminate hessian here?
         loss = cp.sum_squares(
@@ -210,27 +214,42 @@ class SpectralEM():
     def embed(self, rankings):
         # Embedd the rankings into {-1, +1} vectorization
         d = int(self.n * (self.n-1)/2)
-        X = np.zeros((len(rankings), d))
-
-        for idpi, ranking in enumerate(rankings):
+        X = np.zeros((len(rankings), d), dtype=np.float32)
+        
+        S = np.zeros((self.n, self.n, len(rankings)))
+        for idpi in range(len(rankings)):
+            ranking = rankings[idpi]
             Xi = np.zeros((self.n, self.n))
-            for idx, i in enumerate(ranking[:-1]):
-                for idj in range(idx+1, len(ranking)):
-                    j = ranking[idj]
-                    Xi[j, i] = 1./2
-                    # Xi[i, j] = -1s
+            for idi in range(len(ranking)-1):
+                for idj in range(idi+1, len(ranking)):
+                    Xi[ranking[idj], ranking[idi]] = 1./2
+                    S[ranking[idi], ranking[idj], idpi] = 1
             X[idpi, :] = Xi[np.triu_indices(self.n, 1)].flatten()
+        self.choice_tensor = S
         return X
 
     def spectral_clustering(self, X):
-        U, s, Vh = svd(X, full_matrices=False)
-        s[self.K:] = 0
-        Sigma = np.diag(s)
-        Y = (U @ Sigma) @ Vh
-        assert(Y.shape == X.shape)
-        clustering = KMeans(self.K)
-        clustering.fit(Y)
-        return clustering.labels_, clustering.cluster_centers_
+        start = time.time()
+        # U, s, Vh = svd(X, full_matrices=False)
+        # print("SVD took", time.time() - start)
+        # s[self.K:] = 0
+        # Sigma = np.diag(s)
+        # start = time.time()
+        # Y = (U @ Sigma) @ Vh
+        # assert(Y.shape == X.shape)
+        # print("Dimension reduction took", time.time() - start)
+        # # kmeans = faiss.Kmeans(d=Y.shape[1], k=self.K)
+        # # kmeans.train(Y)
+        # start = time.time()
+        # clustering = KMeans(self.K)
+        # clustering.fit(Y)
+        kmeans = faiss.Kmeans(d=X.shape[1], k=self.K)
+        kmeans.train(X)
+        centers = kmeans.centroids
+        _, labels = kmeans.index.search(X, 1)
+        labels = labels.flatten()
+        print("Kmeans took ", time.time() - start)
+        return labels, centers
 
     def m_step(self, rankings, posterior_dist, U_current=None):
         if U_current is None:
@@ -240,7 +259,7 @@ class SpectralEM():
         for k in range(self.K):
             lsr = RegularizedILSR(self.n, self.lambd, self.nu)
             # Use the precomputed choice tensor to avoid wasteful computation
-            Uk = lsr.fit_accelerated(self.choice_tensor, sample_weights=posterior_dist[:, k], theta_init=U_current[k,:], max_iters=self.ilsr_max_iters, is_choice_tensor=True)
+            Uk = lsr.fit(self.choice_tensor, sample_weights=posterior_dist[:, k], theta_init=U_current[k,:], max_iters=self.ilsr_max_iters, is_choice_tensor=True)
             U_all.append(Uk)
         return np.array(U_all)
 
@@ -255,6 +274,13 @@ class SpectralEM():
         if self.trimmed_llh:
             qz = np.where(qz < self.trimmed_threshold, 0, qz)
             qz /= qz.sum(1)[:, np.newaxis] # Re-normalize
+        
+        if self.hard_e_step:
+            qz_hard = np.zeros((m, K))
+            for l in range(m):
+                qz_hard[np.random.choice(K, size=None, p=qz[l, :])] = 1
+            qz = qz_hard
+        
         return qz
     
     def estimate_log_likelihood_pl(self, rankings, U):

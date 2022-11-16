@@ -53,8 +53,13 @@ class BayesianEMGS:
         all_p = [np.log(p) - np.mean(np.log(p), 1)[:, np.newaxis] for (_, _, p, _) in posterior_samples]
         all_p = np.array(all_p)
         mean_p = np.mean(all_p, 0)
+        
+        all_alpha = [w for (_, _, _, w ) in posterior_samples]
+        all_alpha = np.array(all_alpha)
+        alpha = np.mean(all_alpha, 0)
+        alpha /= np.sum(alpha)
         assert(mean_p.shape == (self.G, self.n))
-        return mean_p
+        return mean_p, alpha
     
     def draw_y(self, rankings, y, z, p, w, u, delta):
         # Each yst is sampled independently from the gamma distribution
@@ -101,8 +106,16 @@ class BayesianEMGS:
         return p_sampled
     
     def draw_w(self, rankings, y, z, p, w, u, delta):
-        # For now, always return the uniform
-        return np.ones((self.G)) * 1./self.G
+        # Draw from the dirichlet distribution with parameters
+        # beta_g = alpha g - 1 + sum sg
+        beta = np.zeros((self.G,))
+        unique, counts = np.unique(z, return_counts=True)
+        z_dict = dict(zip(unique, counts))
+        for g in range(self.G):
+            beta[g] = self.prior_alpha + z_dict[g] if g in z_dict else self.prior_alpha
+            
+        w = np.random.dirichlet(beta)
+        return w
     
     def map_estimate(self, u, delta, rankings, p_init, max_iters=100, eps=1e-6):
         # Run the EM algorithm till convergence
@@ -135,11 +148,11 @@ class BayesianEMGS:
                     denominator = np.sum(z[:, g] * sum_over_t) 
                     p_next[g, i] = (self.prior_c - 1 + np.sum(z[:, g] * u[:, i])) / denominator
             
-            # Update w (may be skip this, assuming we're operating in the uniform mixing probability case)
-            # w_next = np.zeros_like(w)
-            # for g in range(self.G):
-            #     w_next[g] = (self.prior_alpha -1 + np.sum(z[:, g])) / (self.G * self.prior_alpha - self.G + m)
-            w_next = w
+            # Update w
+            w_next = np.zeros_like(w)
+            for g in range(self.G):
+                w_next[g] = (self.prior_alpha - 1 + np.sum(z[:, g])) / (self.G * self.prior_alpha - self.G + m)
+            w_next /= np.sum(w_next)
                 
             # Check for convergence
             if np.sum(np.square(p_next - p)) + np.sum(np.square(w - w_next)) < eps:

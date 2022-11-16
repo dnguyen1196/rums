@@ -1,5 +1,5 @@
 import numpy as np
-
+import itertools as it
 
 def generate_partial_ranked_data(U, menus, noise, m=200, seed=None):
     rankings = []
@@ -120,13 +120,38 @@ def generate_time_varying_rum_comparisons(U_all, noise, L=100, p0=None, seed=Non
         data_at_time_t = []
         # Generate Erdos-Renyi graph with prob p0
         pairs = generate_pairs_erdos_renyi(n, p0)
-        print(pairs)
         data_at_time_t.extend(
             generate_partial_ranked_data(U_all[:, t], pairs, noise, L)
         )
         data_by_time.append(data_at_time_t)
 
     return data_by_time
+
+
+def generate_timed_rankings_from_partworths(dynamic_partworths, noise, m_per_time=100):
+    T = len(dynamic_partworths) # Number of time steps
+    n = len(dynamic_partworths[0]) # number of items
+    
+    rankings = []
+    for t in range(T):
+        rankings_at_t = []
+        for ranking in generate_iid_rum_ranked_data(dynamic_partworths[t, :], noise, m_per_time):
+            rankings_at_t.append(ranking)
+        rankings.append(rankings_at_t)
+        
+    return rankings
+
+
+
+def generate_timed_partial_rankings_from_partworths(dynamic_partworths, menus_all_times, noise, m_per_time=100):
+    T = len(dynamic_partworths) # Number of time steps    
+    rankings = []
+    for t in range(T):
+        rankings_at_t = []
+        for ranking in generate_partial_ranked_data(dynamic_partworths[t, :], menus_all_times[t], noise, m_per_time):
+            rankings_at_t.append(ranking)
+        rankings.append(rankings_at_t)
+    return rankings
 
 
 def generate_comparisons_with_P(P, pairs, L=100):

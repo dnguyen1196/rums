@@ -210,31 +210,8 @@ def _mm_rankings_acc(n_items, rankings, win_matrix, data_weights, params):
         cum_weights_sum = np.cumsum(1./cum_weights_sum) # cum_weights_sum[i] = sum_{0 to i} 1./sum(weights for items below j)
         cum_weights_sum[-1] = cum_weights_sum[-2]
         denoms[ranking] += data_weights[idx] * cum_weights_sum
-        
-        # sum_ = weights.take(ranking).sum()
-        # for i, winner in enumerate(ranking[:-1]):
-        #     wins[winner] += data_weights[idx]
-        #     val = data_weights[idx] / sum_
-        #     denoms[ranking[i:]] += val
-        #     sum_ -= weights[winner]
 
     return wins, denoms
-
-
-def _mm_rankings(n_items, data, win_matrix, data_weights, params):
-    """Inner loop of MM algorithm for ranking data."""
-    weights = exp_transform(params)
-    wins = np.zeros(n_items, dtype=float)
-    denoms = np.zeros(n_items, dtype=float)
-    for l, ranking in enumerate(data):
-        sum_ = weights.take(ranking).sum()
-        for i, winner in enumerate(ranking[:-1]):
-            wins[winner] += data_weights[l]
-            val = data_weights[l] / sum_
-            denoms[ranking[i:]] += val
-            sum_ -= weights[winner]
-    return wins, denoms
-
 
 def _mm(n_items, data, win_matrix, data_weights, initial_params, alpha, max_iter, tol, mm_fun):
     """
