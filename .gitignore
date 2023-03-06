@@ -163,8 +163,8 @@ notebooks/
 rums/data/datasets/
 experiments_results/
 kill_processes.sh
-mixture_real_experiments.py
-mixture_synthetic_experiments.py
+# mixture_real_experiments.py
+# mixture_synthetic_experiments.py
 real_experiments.py
 run_experiments.sh
 synthetic_experiments.py
