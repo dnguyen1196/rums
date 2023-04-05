@@ -66,10 +66,11 @@ class PairwiseEmbedding(Embedding):
                 if itemi < itemj:
                     # Mapping from (itemi, itemj) pair to 1d index in the embedding vector
                     idx = self.n * itemi - int((itemi + 1) * (itemi) / 2) + (itemj - itemi - 1)
-                    v[idx] = 1./2 
+                    # v[idx] = 1./2 
+                    v[idx] = 1.
                 else:
                     idx = self.n * itemj - int((itemj + 1) * (itemj) / 2) + (itemi - itemj - 1)
-                    v[idx] = -1./2
+                    # v[idx] = -1./2
 
         return v
     
